@@ -33,7 +33,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 		autoRefresh: true,
 		distance: 0,
 		filter: "*",
-		helper: "original",
+		helper: "clone",
 		tolerance: "touch",
 
 		// callbacks
@@ -57,7 +57,6 @@ $.widget("ui.multidrag", $.ui.mouse, {
 		if (this.options.disabled){
 			this.element.addClass("ui-multidrag-disabled");
 		}
-		this._setHandleClassName();
 
 		this.dragged = false;
 
@@ -85,6 +84,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 		this.refresh();
 
 		this.multidrag_set = multidrag_set.addClass("ui-multidraggable");
+		this._setHandleClassName();
 
 		this._mouseInit();
 		this.drag_originator = null;
@@ -93,7 +93,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 	},
 
 	_destroy: function() {
-		if ( ( this.drag_helper || this.element ).is( ".ui-draggable-dragging" ) ) {
+		if ( ( this.drag_helper || this.element ).is( ".ui-multidrag-dragging" ) ) {
 			this.destroyOnClear = true;
 			return;
 		}
@@ -107,9 +107,73 @@ $.widget("ui.multidrag", $.ui.mouse, {
 		this._mouseDestroy();
 	},
 
+	_mouseCapture: function(event) {
+		var o = this.options;
+
+		this._blurActiveElement( event );
+
+		// among others, prevent a drag on a resizable-handle
+		if (this.helper || o.disabled || $(event.target).closest(".ui-resizable-handle").length > 0) {
+			return false;
+		}
+
+		//Quit if we're not on a valid handle
+		this.handle = this._getHandle(event);
+		if (!this.handle) {
+			return false;
+		}
+
+		this._blockFrames( o.iframeFix === true ? "iframe" : o.iframeFix );
+
+		return true;
+
+	},
+
+	_blockFrames: function( selector ) {
+		this.iframeBlocks = this.document.find( selector ).map(function() {
+			var iframe = $( this );
+
+			return $( "<div>" )
+				.css( "position", "absolute" )
+				.appendTo( iframe.parent() )
+				.outerWidth( iframe.outerWidth() )
+				.outerHeight( iframe.outerHeight() )
+				.offset( iframe.offset() )[ 0 ];
+		});
+	},
+
+	_unblockFrames: function() {
+		if ( this.iframeBlocks ) {
+			this.iframeBlocks.remove();
+			delete this.iframeBlocks;
+		}
+	},
+
+	_blurActiveElement: function( event ) {
+		var document = this.document[ 0 ];
+
+		// Only need to blur if the event occurred on the draggable itself, see #10527
+		if ( !this.handleElement.is( event.target ) ) {
+			return;
+		}
+
+		// support: IE9
+		// IE9 throws an "Unspecified error" accessing document.activeElement from an <iframe>
+		try {
+
+			// Support: IE9, IE10
+			// If the <body> is blurred, IE will switch windows, see #9520
+			if ( document.activeElement && document.activeElement.nodeName.toLowerCase() !== "body" ) {
+
+				// Blur any element that currently has focus, see #4261
+				$( document.activeElement ).blur();
+			}
+		} catch ( error ) {}
+	},
+
 	_mouseStart: function(event) {
 		var that = this,
-			options = this.options;
+			o = this.options;
 
 		this.opos = [ event.pageX, event.pageY ];
 
@@ -117,10 +181,10 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			return;
 		}
 
-		// Helper should only activate if the Parent Container is click-dragged, not the child element
+		// Select Helper should only activate if the Parent Container is click-dragged, not the child element
 		if (event.target === this.element) {
 			this.drag_originator = "container";
-			$(options.appendTo).append(this.select_helper);
+			$(o.appendTo).append(this.select_helper);
 			// position helper (lasso)
 			this.select_helper.css({
 				"left": event.pageX,
@@ -129,13 +193,62 @@ $.widget("ui.multidrag", $.ui.mouse, {
 				"height": 0
 			});
 		}
-		if ($(event.target).hasClass("ui-draggable")) {
-			this.drag_originator = "draggable";
+
+
+		this.multidrag_set = $(o.filter, this.element[0]);
+
+
+		if (o.autoRefresh) {
+			this.refresh();
+		}
+
+		this.multidrag_set.filter(".ui-multidrag-selected").each(function() {
+			var multidragged = $.data(this, "multidrag-item");
+			multidragged.startselected = true;
+			if (!event.metaKey && !event.ctrlKey) {
+				multidragged.$element.removeClass("ui-multidrag-selected");
+				multidragged.selected = false;
+				multidragged.$element.addClass("ui-multidrag-unselecting");
+				multidragged.unselecting = true;
+				// multidrag UNSELECTING callback
+				that._trigger("unselecting", event, {
+					unselecting: multidragged.element
+				});
+			}
+		});
+
+		$(event.target).parents().addBack().each(function() {
+			var doSelect,
+				multidragged = $.data(this, "multidrag-item");
+			if (multidragged) {
+				doSelect = (!event.metaKey && !event.ctrlKey) || !multidragged.$element.hasClass("ui-multidrag-selected");
+				multidragged.$element
+					.removeClass(doSelect ? "ui-multidrag-unselecting" : "ui-multidrag-selected")
+					.addClass(doSelect ? "ui-multidrag-selecting" : "ui-multidrag-unselecting");
+				multidragged.unselecting = !doSelect;
+				multidragged.selecting = doSelect;
+				multidragged.selected = doSelect;
+				// multidrag (UN)SELECTING callback
+				if (doSelect) {
+					that._trigger("selecting", event, {
+						selecting: multidragged.element
+					});
+				} else {
+					that._trigger("unselecting", event, {
+						unselecting: multidragged.element
+					});
+				}
+				return false;
+			}
+		});
+
+		if ($(event.target).hasClass("ui-multidraggable")) {
+			this.drag_helper = this._createHelper(event);
+			this.drag_originator = "multidrag";
 
 			//Create and append the visible helper
-			this.drag_helper = this._createHelper(event);
 
-			this.drag_helper.addClass("ui-draggable-dragging");
+			this.drag_helper.addClass("ui-multidrag-dragging");
 
 			//Cache the helper size
 			this._cacheHelperProportions();
@@ -155,7 +268,8 @@ $.widget("ui.multidrag", $.ui.mouse, {
 
 			//Store the helper's css position
 			this.cssPosition = this.drag_helper.css( "position" );
-			this.scrollParent = this.drag_helper.scrollParent( true );
+			console.log(this.drag_helper);
+			this.scrollParent = this.drag_helper.eq(0).scrollParent( true );
 			this.offsetParent = this.drag_helper.offsetParent();
 			this.hasFixedAncestor = this.drag_helper.parents().filter(function() {
 					return $( this ).css( "position" ) === "fixed";
@@ -202,58 +316,26 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			}
 		}
 
-		this.multidrag_set = $(options.filter, this.element[0]);
-
 		this._trigger("start", event);
-
-
-		if (options.autoRefresh) {
-			this.refresh();
-		}
-
-		this.multidrag_set.filter(".ui-multidrag-selected").each(function() {
-			var multidragged = $.data(this, "multidrag-item");
-			multidragged.startselected = true;
-			if (!event.metaKey && !event.ctrlKey) {
-				multidragged.$element.removeClass("ui-multidrag-selected");
-				multidragged.selected = false;
-				multidragged.$element.addClass("ui-multidrag-unselecting");
-				multidragged.unselecting = true;
-				// multidrag UNSELECTING callback
-				that._trigger("unselecting", event, {
-					unselecting: multidragged.element
-				});
-			}
-		});
-
-		$(event.target).parents().addBack().each(function() {
-			var doSelect,
-				multidragged = $.data(this, "multidrag-item");
-			if (multidragged) {
-				doSelect = (!event.metaKey && !event.ctrlKey) || !multidragged.$element.hasClass("ui-multidrag-selected");
-				multidragged.$element
-					.removeClass(doSelect ? "ui-multidrag-unselecting" : "ui-multidrag-selected")
-					.addClass(doSelect ? "ui-multidrag-selecting" : "ui-multidrag-unselecting");
-				multidragged.unselecting = !doSelect;
-				multidragged.selecting = doSelect;
-				multidragged.selected = doSelect;
-				// multidrag (UN)SELECTING callback
-				if (doSelect) {
-					that._trigger("selecting", event, {
-						selecting: multidragged.element
-					});
-				} else {
-					that._trigger("unselecting", event, {
-						unselecting: multidragged.element
-					});
-				}
-				return false;
-			}
-		});
 
 	},
 
-	_mouseDrag: function(event) {
+	_refreshOffsets: function( event ) {
+		this.offset = {
+			top: this.positionAbs.top - this.margins.top,
+			left: this.positionAbs.left - this.margins.left,
+			scroll: false,
+			parent: this._getParentOffset(),
+			relative: this._getRelativeOffset()
+		};
+
+		this.offset.click = {
+			left: event.pageX - this.offset.left,
+			top: event.pageY - this.offset.top
+		};
+	},
+
+	_mouseDrag: function(event, noPropagation) {
 
 		this.dragged = true;
 
@@ -269,7 +351,8 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			x2 = event.pageX,
 			y2 = event.pageY;
 
-		if ( this.drag_originator == "draggable") {
+		if ( this.drag_originator == "multidrag") {
+			var drag_handle = event.target; // Let's try to get this to flippin work
 			// reset any necessary cached properties (see #5009)
 			if ( this.hasFixedAncestor ) {
 				this.offset.parent = this._getParentOffset();
@@ -289,8 +372,13 @@ $.widget("ui.multidrag", $.ui.mouse, {
 				this.position = ui.position;
 			}
 
-			this.drag_helper[ 0 ].style.left = this.position.left + "px";
-			this.drag_helper[ 0 ].style.top = this.position.top + "px";
+			this.drag_helper.each(function(index, elmt) using this {
+				var $elmt = $(elmt);
+				$elmt.css("top", (this.position.top + index * $elmt.height()) + "px");
+			});
+			this.drag_helper.css("left", this.position.left + "px");
+
+			console.log(this.drag_helper);
 
 			if ($.ui.ddmanager) {
 				$.ui.ddmanager.drag(this, event);
@@ -381,7 +469,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 
 		this.dragged = false;
 
-		if (this.drag_origininator == "container") {
+		if (this.drag_origininator == "container" || !this.dropped) {
 			$(".ui-multidrag-unselecting", this.element[0]).each(function() {
 				var multidragged = $.data(this, "multidrag-item");
 				multidragged.$element.removeClass("ui-multidrag-unselecting");
@@ -402,7 +490,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 				});
 			});
 		}
-		if ( this.drag_originator == "draggable") {
+		if ( this.drag_originator == "multidrag") {
 			if ($.ui.ddmanager && !this.options.dropBehaviour) {
 				dropped = $.ui.ddmanager.drop(this, event);
 			}
@@ -454,7 +542,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 
 	cancel: function() {
 
-		if (this.helper.is(".ui-draggable-dragging")) {
+		if (this.drag_helper.is(".ui-multidrag-dragging")) {
 			this._mouseUp({});
 		} else {
 			this._clear();
@@ -473,39 +561,44 @@ $.widget("ui.multidrag", $.ui.mouse, {
 	_setHandleClassName: function() {
 		this.handleElement = this.options.handle ?
 			this.element.find( this.options.handle ) : this.element;
-		this.handleElement.addClass( "ui-draggable-handle" );
+		// this.handleElement.addClass( "ui-multidrag-handle" );
+		this.multidrag_set.addClass( "ui-multidrag-handle" );
 	},
 
 	_removeHandleClassName: function() {
-		this.handleElement.removeClass( "ui-draggable-handle" );
+		// this.handleElement.removeClass( "ui-multidrag-handle" );
+		this.multidrag_set.addClass( "ui-multidrag-handle" );
 	},
 
 	_createHelper: function(event) {
 
+		console.log(this.multidrag_set);
+		var drag_party = this.multidrag_set.filter(".ui-multidrag-selected,.ui-multidrag-selecting,.ui-multidrag-unselecting");
+		console.log(drag_party);
 		var o = this.options,
-			helperIsFunction = $.isFunction( o.helper ),
-			helper = helperIsFunction ?
-				$( o.helper.apply( this.element[ 0 ], [ event ] ) ) :
+			helperIsFunction = $.isFunction( o.drag_helper ),
+			drag_helper = helperIsFunction ?
+				$( o.helper.apply( drag_party, [ event ] ) ) :
 				( o.helper === "clone" ?
-					this.element.clone().removeAttr( "id" ) :
-					this.element );
+					drag_party.clone().removeAttr( "id" ) :
+					drag_party );
 
-		if (!helper.parents("body").length) {
-			helper.appendTo((o.appendTo === "parent" ? this.element[0].parentNode : o.appendTo));
+		if (!drag_helper.parents("body").length) {
+			drag_helper.appendTo((o.appendTo === "parent" ? drag_party[0].parentNode : o.appendTo));
 		}
 
 		// http://bugs.jqueryui.com/ticket/9446
 		// a helper function can return the original element
 		// which wouldn't have been set to relative in _create
-		if ( helperIsFunction && helper[ 0 ] === this.element[ 0 ] ) {
+		if ( helperIsFunction && drag_helper[ 0 ] === drag_party[ 0 ] ) {
 			this._setPositionRelative();
 		}
 
-		if (helper[0] !== this.element[0] && !(/(fixed|absolute)/).test(helper.css("position"))) {
-			helper.css("position", "absolute");
+		if (drag_helper[0] !== drag_party[0] && !(/(fixed|absolute)/).test(drag_helper.css("position"))) {
+			drag_helper.css("position", "absolute");
 		}
 
-		return helper;
+		return drag_helper;
 
 	},
 
@@ -526,13 +619,13 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			this.offset.click.left = obj.left + this.margins.left;
 		}
 		if ("right" in obj) {
-			this.offset.click.left = this.helperProportions.width - obj.right + this.margins.left;
+			this.offset.click.left = this.drag_helperProportions.width - obj.right + this.margins.left;
 		}
 		if ("top" in obj) {
 			this.offset.click.top = obj.top + this.margins.top;
 		}
 		if ("bottom" in obj) {
-			this.offset.click.top = this.helperProportions.height - obj.bottom + this.margins.top;
+			this.offset.click.top = this.drag_helperProportions.height - obj.bottom + this.margins.top;
 		}
 	},
 
@@ -575,8 +668,8 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			scrollIsRootNode = this._isRootNode( this.scrollParent[ 0 ] );
 
 		return {
-			top: p.top - ( parseInt(this.helper.css( "top" ), 10) || 0 ) + ( !scrollIsRootNode ? this.scrollParent.scrollTop() : 0 ),
-			left: p.left - ( parseInt(this.helper.css( "left" ), 10) || 0 ) + ( !scrollIsRootNode ? this.scrollParent.scrollLeft() : 0 )
+			top: p.top - ( parseInt(this.drag_helper.css( "top" ), 10) || 0 ) + ( !scrollIsRootNode ? this.scrollParent.scrollTop() : 0 ),
+			left: p.left - ( parseInt(this.drag_helper.css( "left" ), 10) || 0 ) + ( !scrollIsRootNode ? this.scrollParent.scrollLeft() : 0 )
 		};
 
 	},
@@ -591,9 +684,9 @@ $.widget("ui.multidrag", $.ui.mouse, {
 	},
 
 	_cacheHelperProportions: function() {
-		this.helperProportions = {
-			width: this.helper.outerWidth(),
-			height: this.helper.outerHeight()
+		this.dragHelperProportions = {
+			width: this.drag_helper.outerWidth(),
+			height: this.drag_helper.outerHeight()
 		};
 	},
 
@@ -614,8 +707,8 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			this.containment = [
 				$( window ).scrollLeft() - this.offset.relative.left - this.offset.parent.left,
 				$( window ).scrollTop() - this.offset.relative.top - this.offset.parent.top,
-				$( window ).scrollLeft() + $( window ).width() - this.helperProportions.width - this.margins.left,
-				$( window ).scrollTop() + ( $( window ).height() || document.body.parentNode.scrollHeight ) - this.helperProportions.height - this.margins.top
+				$( window ).scrollLeft() + $( window ).width() - this.dragHelperProportions.width - this.margins.left,
+				$( window ).scrollTop() + ( $( window ).height() || document.body.parentNode.scrollHeight ) - this.dragHelperProportions.height - this.margins.top
 			];
 			return;
 		}
@@ -624,8 +717,8 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			this.containment = [
 				0,
 				0,
-				$( document ).width() - this.helperProportions.width - this.margins.left,
-				( $( document ).height() || document.body.parentNode.scrollHeight ) - this.helperProportions.height - this.margins.top
+				$( document ).width() - this.dragHelperProportions.width - this.margins.left,
+				( $( document ).height() || document.body.parentNode.scrollHeight ) - this.dragHelperProportions.height - this.margins.top
 			];
 			return;
 		}
@@ -636,7 +729,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 		}
 
 		if ( o.containment === "parent" ) {
-			o.containment = this.helper[ 0 ].parentNode;
+			o.containment = this.drag_helper[ 0 ].parentNode;
 		}
 
 		c = $( o.containment );
@@ -654,13 +747,13 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			( isUserScrollable ? Math.max( ce.scrollWidth, ce.offsetWidth ) : ce.offsetWidth ) -
 				( parseInt( c.css( "borderRightWidth" ), 10 ) || 0 ) -
 				( parseInt( c.css( "paddingRight" ), 10 ) || 0 ) -
-				this.helperProportions.width -
+				this.dragHelperProportions.width -
 				this.margins.left -
 				this.margins.right,
 			( isUserScrollable ? Math.max( ce.scrollHeight, ce.offsetHeight ) : ce.offsetHeight ) -
 				( parseInt( c.css( "borderBottomWidth" ), 10 ) || 0 ) -
 				( parseInt( c.css( "paddingBottom" ), 10 ) || 0 ) -
-				this.helperProportions.height -
+				this.dragHelperProportions.height -
 				this.margins.top -
 				this.margins.bottom
 		];
@@ -673,6 +766,8 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			pos = this.position;
 		}
 
+		console.log(this.drag_helper);
+		console.log(this);
 		var mod = d === "absolute" ? 1 : -1,
 			scrollIsRootNode = this._isRootNode( this.scrollParent[ 0 ] );
 
@@ -781,11 +876,11 @@ $.widget("ui.multidrag", $.ui.mouse, {
 	},
 
 	_clear: function() {
-		this.helper.removeClass("ui-draggable-dragging");
-		if (this.helper[0] !== this.element[0] && !this.cancelHelperRemoval) {
-			this.helper.remove();
+		this.drag_helper.removeClass("ui-multidrag-dragging");
+		if (this.drag_helper[0] !== this.element[0] && !this.cancelHelperRemoval) {
+			this.drag_helper.remove();
 		}
-		this.helper = null;
+		this.drag_helper = null;
 		this.cancelHelperRemoval = false;
 		if ( this.destroyOnClear ) {
 			this.destroy();
@@ -793,13 +888,13 @@ $.widget("ui.multidrag", $.ui.mouse, {
 	},
 
 	_normalizeRightBottom: function() {
-		if ( this.options.axis !== "y" && this.helper.css( "right" ) !== "auto" ) {
-			this.helper.width( this.helper.width() );
-			this.helper.css( "right", "auto" );
+		if ( this.options.axis !== "y" && this.drag_helper.css( "right" ) !== "auto" ) {
+			this.drag_helper.width( this.drag_helper.width() );
+			this.drag_helper.css( "right", "auto" );
 		}
-		if ( this.options.axis !== "x" && this.helper.css( "bottom" ) !== "auto" ) {
-			this.helper.height( this.helper.height() );
-			this.helper.css( "bottom", "auto" );
+		if ( this.options.axis !== "x" && this.drag_helper.css( "bottom" ) !== "auto" ) {
+			this.drag_helper.height( this.drag_helper.height() );
+			this.drag_helper.css( "bottom", "auto" );
 		}
 	},
 
@@ -821,7 +916,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 
 	_uiHash: function() {
 		return {
-			helper: this.helper,
+			drag_helper: this.drag_helper,
 			position: this.position,
 			originalPosition: this.originalPosition,
 			offset: this.positionAbs
@@ -830,18 +925,18 @@ $.widget("ui.multidrag", $.ui.mouse, {
 
 });
 
-$.ui.plugin.add( "draggable", "connectToSortable", {
-	start: function( event, ui, draggable ) {
+$.ui.plugin.add( "multidrag", "connectToSortable", {
+	start: function( event, ui, multidrag ) {
 		var uiSortable = $.extend( {}, ui, {
-			item: draggable.element
+			item: multidrag.element
 		});
 
-		draggable.sortables = [];
-		$( draggable.options.connectToSortable ).each(function() {
+		multidrag.sortables = [];
+		$( multidrag.options.connectToSortable ).each(function() {
 			var sortable = $( this ).sortable( "instance" );
 
 			if ( sortable && !sortable.options.disabled ) {
-				draggable.sortables.push( sortable );
+				multidrag.sortables.push( sortable );
 
 				// refreshPositions is called at drag start to refresh the containerCache
 				// which is used in drag. This ensures it's initialized and synchronized
@@ -851,21 +946,21 @@ $.ui.plugin.add( "draggable", "connectToSortable", {
 			}
 		});
 	},
-	stop: function( event, ui, draggable ) {
+	stop: function( event, ui, multidrag ) {
 		var uiSortable = $.extend( {}, ui, {
-			item: draggable.element
+			item: multidrag.element
 		});
 
-		draggable.cancelHelperRemoval = false;
+		multidrag.cancelHelperRemoval = false;
 
-		$.each( draggable.sortables, function() {
+		$.each( multidrag.sortables, function() {
 			var sortable = this;
 
 			if ( sortable.isOver ) {
 				sortable.isOver = 0;
 
 				// Allow this sortable to handle removing the helper
-				draggable.cancelHelperRemoval = true;
+				multidrag.cancelHelperRemoval = true;
 				sortable.cancelHelperRemoval = false;
 
 				// Use _storedCSS To restore properties in the sortable,
@@ -881,7 +976,7 @@ $.ui.plugin.add( "draggable", "connectToSortable", {
 
 				// Once drag has ended, the sortable should return to using
 				// its original helper, not the shared helper from draggable
-				sortable.options.helper = sortable.options._helper;
+				sortable.options.drag_helper = sortable.options._helper;
 			} else {
 				// Prevent this Sortable from removing the helper.
 				// However, don't set the draggable to remove the helper
@@ -892,24 +987,24 @@ $.ui.plugin.add( "draggable", "connectToSortable", {
 			}
 		});
 	},
-	drag: function( event, ui, draggable ) {
-		$.each( draggable.sortables, function() {
+	drag: function( event, ui, multidrag ) {
+		$.each( multidrag.sortables, function() {
 			var innermostIntersecting = false,
 				sortable = this;
 
 			// Copy over variables that sortable's _intersectsWith uses
-			sortable.positionAbs = draggable.positionAbs;
-			sortable.helperProportions = draggable.helperProportions;
-			sortable.offset.click = draggable.offset.click;
+			sortable.positionAbs = multidrag.positionAbs;
+			sortable.dragHelperProportions = multidrag.dragHelperProportions;
+			sortable.offset.click = multidrag.offset.click;
 
 			if ( sortable._intersectsWith( sortable.containerCache ) ) {
 				innermostIntersecting = true;
 
-				$.each( draggable.sortables, function() {
+				$.each( multidrag.sortables, function() {
 					// Copy over variables that sortable's _intersectsWith uses
-					this.positionAbs = draggable.positionAbs;
-					this.helperProportions = draggable.helperProportions;
-					this.offset.click = draggable.offset.click;
+					this.positionAbs = multidrag.positionAbs;
+					this.dragHelperProportions = multidrag.dragHelperProportions;
+					this.offset.click = multidrag.offset.click;
 
 					if ( this !== sortable &&
 							this._intersectsWith( this.containerCache ) &&
@@ -928,17 +1023,17 @@ $.ui.plugin.add( "draggable", "connectToSortable", {
 					sortable.isOver = 1;
 
 					// Store draggable's parent in case we need to reappend to it later.
-					draggable._parent = ui.helper.parent();
+					multidrag._parent = ui.drag_helper.parent();
 
-					sortable.currentItem = ui.helper
+					sortable.currentItem = ui.drag_helper
 						.appendTo( sortable.element )
 						.data( "ui-sortable-item", true );
 
 					// Store helper option to later restore it
-					sortable.options._helper = sortable.options.helper;
+					sortable.options._helper = sortable.options.drag_helper;
 
-					sortable.options.helper = function() {
-						return ui.helper[ 0 ];
+					sortable.options.drag_helper = function() {
+						return ui.drag_helper[ 0 ];
 					};
 
 					// Fire the start events of the sortable with our passed browser event,
@@ -949,28 +1044,28 @@ $.ui.plugin.add( "draggable", "connectToSortable", {
 
 					// Because the browser event is way off the new appended portlet,
 					// modify necessary variables to reflect the changes
-					sortable.offset.click.top = draggable.offset.click.top;
-					sortable.offset.click.left = draggable.offset.click.left;
-					sortable.offset.parent.left -= draggable.offset.parent.left -
+					sortable.offset.click.top = multidrag.offset.click.top;
+					sortable.offset.click.left = multidrag.offset.click.left;
+					sortable.offset.parent.left -= multidrag.offset.parent.left -
 						sortable.offset.parent.left;
-					sortable.offset.parent.top -= draggable.offset.parent.top -
+					sortable.offset.parent.top -= multidrag.offset.parent.top -
 						sortable.offset.parent.top;
 
-					draggable._trigger( "toSortable", event );
+					multidrag._trigger( "toSortable", event );
 
-					// Inform draggable that the helper is in a valid drop zone,
+					// Inform multidrag that the helper is in a valid drop zone,
 					// used solely in the revert option to handle "valid/invalid".
-					draggable.dropped = sortable.element;
+					multidrag.dropped = sortable.element;
 
 					// Need to refreshPositions of all sortables in the case that
 					// adding to one sortable changes the location of the other sortables (#9675)
-					$.each( draggable.sortables, function() {
+					$.each( multidrag.sortables, function() {
 						this.refreshPositions();
 					});
 
 					// hack so receive/update callbacks work (mostly)
-					draggable.currentItem = draggable.element;
-					sortable.fromOutside = draggable;
+					multidrag.currentItem = multidrag.element;
+					sortable.fromOutside = multidrag;
 				}
 
 				if ( sortable.currentItem ) {
@@ -1000,26 +1095,26 @@ $.ui.plugin.add( "draggable", "connectToSortable", {
 					// restore sortable behaviors that were modfied
 					// when the draggable entered the sortable area (#9481)
 					sortable.options.revert = sortable.options._revert;
-					sortable.options.helper = sortable.options._helper;
+					sortable.options.drag_helper = sortable.options._helper;
 
 					if ( sortable.placeholder ) {
 						sortable.placeholder.remove();
 					}
 
-					// Restore and recalculate the draggable's offset considering the sortable
+					// Restore and recalculate the multidrag's offset considering the sortable
 					// may have modified them in unexpected ways. (#8809, #10669)
-					ui.helper.appendTo( draggable._parent );
-					draggable._refreshOffsets( event );
-					ui.position = draggable._generatePosition( event, true );
+					ui.drag_helper.appendTo( multidrag._parent );
+					multidrag._refreshOffsets( event );
+					ui.position = multidrag._generatePosition( event, true );
 
-					draggable._trigger( "fromSortable", event );
+					multidrag._trigger( "fromSortable", event );
 
-					// Inform draggable that the helper is no longer in a valid drop zone
-					draggable.dropped = false;
+					// Inform multidrag that the helper is no longer in a valid drop zone
+					multidrag.dropped = false;
 
 					// Need to refreshPositions of all sortables just in case removing
 					// from one sortable changes the location of other sortables (#9675)
-					$.each( draggable.sortables, function() {
+					$.each( multidrag.sortables, function() {
 						this.refreshPositions();
 					});
 				}
@@ -1028,7 +1123,7 @@ $.ui.plugin.add( "draggable", "connectToSortable", {
 	}
 });
 
-$.ui.plugin.add("draggable", "cursor", {
+$.ui.plugin.add("multidrag", "cursor", {
 	start: function( event, ui, instance ) {
 		var t = $( "body" ),
 			o = instance.options;
@@ -1046,9 +1141,9 @@ $.ui.plugin.add("draggable", "cursor", {
 	}
 });
 
-$.ui.plugin.add("draggable", "opacity", {
+$.ui.plugin.add("multidrag", "opacity", {
 	start: function( event, ui, instance ) {
-		var t = $( ui.helper ),
+		var t = $( ui.drag_helper ),
 			o = instance.options;
 		if (t.css("opacity")) {
 			o._opacity = t.css("opacity");
@@ -1058,15 +1153,15 @@ $.ui.plugin.add("draggable", "opacity", {
 	stop: function( event, ui, instance ) {
 		var o = instance.options;
 		if (o._opacity) {
-			$(ui.helper).css("opacity", o._opacity);
+			$(ui.drag_helper).css("opacity", o._opacity);
 		}
 	}
 });
 
-$.ui.plugin.add("draggable", "scroll", {
+$.ui.plugin.add("multidrag", "scroll", {
 	start: function( event, ui, i ) {
 		if ( !i.scrollParentNotHidden ) {
-			i.scrollParentNotHidden = i.helper.scrollParent( false );
+			i.scrollParentNotHidden = i.drag_helper.scrollParent( false );
 		}
 
 		if ( i.scrollParentNotHidden[ 0 ] !== i.document[ 0 ] && i.scrollParentNotHidden[ 0 ].tagName !== "HTML" ) {
@@ -1124,14 +1219,14 @@ $.ui.plugin.add("draggable", "scroll", {
 	}
 });
 
-$.ui.plugin.add("draggable", "snap", {
+$.ui.plugin.add("multidrag", "snap", {
 	start: function( event, ui, i ) {
 
 		var o = i.options;
 
 		i.snapElements = [];
 
-		$(o.snap.constructor !== String ? ( o.snap.items || ":data(ui-draggable)" ) : o.snap).each(function() {
+		$(o.snap.constructor !== String ? ( o.snap.items || ":data(ui-multidrag)" ) : o.snap).each(function() {
 			var $t = $(this),
 				$o = $t.offset();
 			if (this !== i.element[0]) {
@@ -1149,8 +1244,8 @@ $.ui.plugin.add("draggable", "snap", {
 		var ts, bs, ls, rs, l, r, t, b, i, first,
 			o = inst.options,
 			d = o.snapTolerance,
-			x1 = ui.offset.left, x2 = x1 + inst.helperProportions.width,
-			y1 = ui.offset.top, y2 = y1 + inst.helperProportions.height;
+			x1 = ui.offset.left, x2 = x1 + inst.dragHelperProportions.width,
+			y1 = ui.offset.top, y2 = y1 + inst.dragHelperProportions.height;
 
 		for (i = inst.snapElements.length - 1; i >= 0; i--){
 
@@ -1173,13 +1268,13 @@ $.ui.plugin.add("draggable", "snap", {
 				ls = Math.abs(l - x2) <= d;
 				rs = Math.abs(r - x1) <= d;
 				if (ts) {
-					ui.position.top = inst._convertPositionTo("relative", { top: t - inst.helperProportions.height, left: 0 }).top;
+					ui.position.top = inst._convertPositionTo("relative", { top: t - inst.dragHelperProportions.height, left: 0 }).top;
 				}
 				if (bs) {
 					ui.position.top = inst._convertPositionTo("relative", { top: b, left: 0 }).top;
 				}
 				if (ls) {
-					ui.position.left = inst._convertPositionTo("relative", { top: 0, left: l - inst.helperProportions.width }).left;
+					ui.position.left = inst._convertPositionTo("relative", { top: 0, left: l - inst.dragHelperProportions.width }).left;
 				}
 				if (rs) {
 					ui.position.left = inst._convertPositionTo("relative", { top: 0, left: r }).left;
@@ -1197,13 +1292,13 @@ $.ui.plugin.add("draggable", "snap", {
 					ui.position.top = inst._convertPositionTo("relative", { top: t, left: 0 }).top;
 				}
 				if (bs) {
-					ui.position.top = inst._convertPositionTo("relative", { top: b - inst.helperProportions.height, left: 0 }).top;
+					ui.position.top = inst._convertPositionTo("relative", { top: b - inst.dragHelperProportions.height, left: 0 }).top;
 				}
 				if (ls) {
 					ui.position.left = inst._convertPositionTo("relative", { top: 0, left: l }).left;
 				}
 				if (rs) {
-					ui.position.left = inst._convertPositionTo("relative", { top: 0, left: r - inst.helperProportions.width }).left;
+					ui.position.left = inst._convertPositionTo("relative", { top: 0, left: r - inst.dragHelperProportions.width }).left;
 				}
 			}
 
