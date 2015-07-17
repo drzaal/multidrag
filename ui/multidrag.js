@@ -181,6 +181,13 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			return;
 		}
 
+                setTimeout(function(){
+                  if (that.drag_originator) {
+                    that.dragged = true;  
+                    that.drag_helper.show();
+                  }
+                }, 100);
+
 		// Select Helper should only activate if the Parent Container is click-dragged, not the child element
 		if (event.target === this.element) {
 			this.drag_originator = "container";
@@ -244,6 +251,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 
 		if ($(event.target).hasClass("ui-multidraggable")) {
 			this.drag_helper = this._createHelper(event);
+                        this.drag_helper.hide();
 			this.drag_originator = "multidrag";
 
 			//Create and append the visible helper
@@ -268,7 +276,6 @@ $.widget("ui.multidrag", $.ui.mouse, {
 
 			//Store the helper's css position
 			this.cssPosition = this.drag_helper.css( "position" );
-			console.log(this.drag_helper);
 			this.scrollParent = this.drag_helper.eq(0).scrollParent( true );
 			this.offsetParent = this.drag_helper.offsetParent();
 			this.hasFixedAncestor = this.drag_helper.parents().filter(function() {
@@ -337,6 +344,9 @@ $.widget("ui.multidrag", $.ui.mouse, {
 
 	_mouseDrag: function(event, noPropagation) {
 
+                if (!this.dragged) {
+                  return;
+                }
 		this.dragged = true;
 
 		if (this.options.disabled) {
@@ -353,6 +363,8 @@ $.widget("ui.multidrag", $.ui.mouse, {
 
 		if ( this.drag_originator == "multidrag") {
 			var drag_handle = event.target; // Let's try to get this to flippin work
+                        // Not using drag_handle_i : Position function flips out if we mouse over the drag_handle
+                        var drag_handle_i = this.drag_helper.index(drag_handle);
 			// reset any necessary cached properties (see #5009)
 			if ( this.hasFixedAncestor ) {
 				this.offset.parent = this._getParentOffset();
@@ -372,13 +384,14 @@ $.widget("ui.multidrag", $.ui.mouse, {
 				this.position = ui.position;
 			}
 
-			this.drag_helper.each(function(index, elmt) using this {
+                        var self = this;
+			this.drag_helper.each(function(index, elmt) {
 				var $elmt = $(elmt);
-				$elmt.css("top", (this.position.top + index * $elmt.height()) + "px");
+                                var offst_i = index - drag_handle_i;
+				$elmt.css("top", (self.position.top + index * $elmt.height()) + "px");
 			});
 			this.drag_helper.css("left", this.position.left + "px");
 
-			console.log(this.drag_helper);
 
 			if ($.ui.ddmanager) {
 				$.ui.ddmanager.drag(this, event);
@@ -467,7 +480,6 @@ $.widget("ui.multidrag", $.ui.mouse, {
 	_mouseStop: function(event) {
 		var that = this;
 
-		this.dragged = false;
 
 		if (this.drag_origininator == "container" || !this.dropped) {
 			$(".ui-multidrag-unselecting", this.element[0]).each(function() {
@@ -514,6 +526,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			}
 		}
 
+		this.dragged = false;
 		this.drag_originator = null;
 		this._trigger("stop", event);
 
@@ -572,9 +585,7 @@ $.widget("ui.multidrag", $.ui.mouse, {
 
 	_createHelper: function(event) {
 
-		console.log(this.multidrag_set);
 		var drag_party = this.multidrag_set.filter(".ui-multidrag-selected,.ui-multidrag-selecting,.ui-multidrag-unselecting");
-		console.log(drag_party);
 		var o = this.options,
 			helperIsFunction = $.isFunction( o.drag_helper ),
 			drag_helper = helperIsFunction ?
@@ -766,8 +777,6 @@ $.widget("ui.multidrag", $.ui.mouse, {
 			pos = this.position;
 		}
 
-		console.log(this.drag_helper);
-		console.log(this);
 		var mod = d === "absolute" ? 1 : -1,
 			scrollIsRootNode = this._isRootNode( this.scrollParent[ 0 ] );
 
@@ -959,6 +968,7 @@ $.ui.plugin.add( "multidrag", "connectToSortable", {
 			if ( sortable.isOver ) {
 				sortable.isOver = 0;
 
+
 				// Allow this sortable to handle removing the helper
 				multidrag.cancelHelperRemoval = true;
 				sortable.cancelHelperRemoval = false;
@@ -973,10 +983,17 @@ $.ui.plugin.add( "multidrag", "connectToSortable", {
 				};
 
 				sortable._mouseStop(event);
+                                sortable.element.find(".ui-multidrag-dragging").css({
+                                  "position": "",
+                                  "width": "",
+                                  "height": "",
+                                  "top": "",
+                                  "left": ""
+                                }).removeClass("ui-multidrag-dragging ui-multidrag-selecting ui-multidrag-unselecting");
 
 				// Once drag has ended, the sortable should return to using
 				// its original helper, not the shared helper from draggable
-				sortable.options.drag_helper = sortable.options._helper;
+				sortable.options.helper = sortable.options._helper;
 			} else {
 				// Prevent this Sortable from removing the helper.
 				// However, don't set the draggable to remove the helper
@@ -993,9 +1010,13 @@ $.ui.plugin.add( "multidrag", "connectToSortable", {
 				sortable = this;
 
 			// Copy over variables that sortable's _intersectsWith uses
+                        console.log(multidrag.positionAbs);
+                        console.log(multidrag.offset.click);
 			sortable.positionAbs = multidrag.positionAbs;
-			sortable.dragHelperProportions = multidrag.dragHelperProportions;
+			sortable.helperProportions = multidrag.dragHelperProportions;
 			sortable.offset.click = multidrag.offset.click;
+			sortable.positionAbs.left += sortable.offset.click.left;
+			sortable.positionAbs.top += sortable.offset.click.top;
 
 			if ( sortable._intersectsWith( sortable.containerCache ) ) {
 				innermostIntersecting = true;
@@ -1003,7 +1024,7 @@ $.ui.plugin.add( "multidrag", "connectToSortable", {
 				$.each( multidrag.sortables, function() {
 					// Copy over variables that sortable's _intersectsWith uses
 					this.positionAbs = multidrag.positionAbs;
-					this.dragHelperProportions = multidrag.dragHelperProportions;
+					this.helperProportions = multidrag.dragHelperProportions;
 					this.offset.click = multidrag.offset.click;
 
 					if ( this !== sortable &&
@@ -1030,10 +1051,10 @@ $.ui.plugin.add( "multidrag", "connectToSortable", {
 						.data( "ui-sortable-item", true );
 
 					// Store helper option to later restore it
-					sortable.options._helper = sortable.options.drag_helper;
+					sortable.options._helper = sortable.options.helper;
 
-					sortable.options.drag_helper = function() {
-						return ui.drag_helper[ 0 ];
+					sortable.options.helper = function() {
+						return ui.drag_helper[0];
 					};
 
 					// Fire the start events of the sortable with our passed browser event,
